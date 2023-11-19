@@ -1,0 +1,77 @@
+name: 3_DR-Demo-Site-Smoke-Tests
+
+on:
+  workflow_call:
+   inputs:
+      version:
+        required: true
+        type: string
+      jarrelease:
+        required: true
+        type: string
+      DryRun:
+        required: true
+        type: string
+      Site:
+        required: true
+        type: string
+
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version'
+        required: true
+        default: '0.0.0'
+      jarrelease:
+        description: 'jar version for deployment'
+        required: true
+        default: 'latest'
+      DryRun:
+        type: choice
+        description: select a DryRun value
+        options:
+        - false
+        - true
+      Site:
+        type: choice
+        description: select a site
+        options:
+        - b
+        - pc1
+
+env:
+ ACTIONS_ALLOW_UNSECURE_COMMANDS: true
+ Site: ${{ github.event.inputs.Site }}
+ DryRun: ${{ github.event.inputs.DryRun }}
+ jarrelease: ${{ github.event.inputs.jarrelease }}
+ version: ${{ github.event.inputs.version }}
+
+jobs:
+
+  DR-Demo-Site-Smoke-Tests:
+     runs-on: [self-hosted, Windows ]
+     outputs:
+      version: ${{ env.version }}
+      Site: ${{ env.Site }}
+      DryRun: ${{ env.DryRun }}
+      JarReleaseVersion: ${{ env.jarrelease }}
+     env:
+      ACTIONS_ALLOW_UNSECURE_COMMANDS: true
+      ReleaseSet: ${{github.event.inputs.version}}
+     steps:  
+     - run: echo ${{ env.ReleaseSet }}
+     - name: DR.Demo-Site-Smoke-Tests
+       run : |
+            cd AntScript
+            echo ${{ env.ReleaseSet }}
+            C:\Ant\apache-ant-1.9.3\bin\ant.bat -file SmokeTestAntScript.xml -DRetain=true -DSite=${{ env.Site }} -DDryRun=${{ env.DryRun }} -Dautodeploy=false -DdeployEnv=demodr -Denvironment=demo -Dversion='${{ env.ReleaseSet }}'
+
+
+  call-workflow:
+    needs: [DR-Demo-Site-Smoke-Tests]
+    uses: ./.github/workflows/4_DR-Demo-Enable-Disable-DR-Demo-Site.yml
+    with: 
+      version: ${{ needs.DR-Demo-Site-Smoke-Tests.outputs.version }}
+      Site: ${{ needs.DR-Demo-Site-Smoke-Tests.outputs.Site }}
+      DryRun: ${{ needs.DR-Demo-Site-Smoke-Tests.outputs.DryRun }}
+      jarrelease: ${{ needs.DR-Demo-Site-Smoke-Tests.outputs.JarReleaseVersion }}
