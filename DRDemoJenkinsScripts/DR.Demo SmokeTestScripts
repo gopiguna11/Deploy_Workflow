@@ -1,0 +1,285 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<project name="DataRoom" basedir="." default="-junit">
+
+
+  <taskdef resource="net/sf/antcontrib/antlib.xml"/>
+  
+  <property name="version" value=""/>
+  <property name="jar.release.version" value="latest"/>
+  <property name="dir.DataRoomAnthillServerRunLocation" value="DRSmokeTestLocation\${environment}"/>
+  <if>
+	<or>
+		<equals arg1="${environment}" arg2="ci"/>
+		<equals arg1="${environment}" arg2="demo"/>
+	</or>
+	<then>
+		<property name="jar.release.version" value="latest"/>
+	</then>
+	<else>
+		<propertyregex property="jar.release.version" input="${version}" regexp="(\d+\.\d+)\.(\d+)" select="\1" override="true"/>
+	</else>
+  </if>
+
+  <property name="dir.DataRoomTestLocation" value="\\c111shvmafqa1.tlr.thomson.com\CobaltPlatform\DataRoom"/>
+  <!--<property name="dir.DataRoomTestLocation" value="\\u0115554-tpl-a.ten.thomsonreuters.com\Shared\CobaltPlatform\DataRoom"/>-->
+  
+  <property name="dir.DataRoomTestJarLocation" value="${dir.DataRoomTestLocation}\test-suite\${jar.release.version}"/>
+
+  <property name="file.DataRoomSmokeTestJar" value="${dir.DataRoomAnthillServerRunLocation}\DataRoomTests.jar"/>
+  <property name="dir.DataRoomAntHillLibLocation" value="${dir.DataRoomAnthillServerRunLocation}\lib"/>
+  <property name="dir.DataRoomAntHillResourcesLocation" value="${dir.DataRoomAnthillServerRunLocation}\resources"/>
+  <property name="dir.DataRoomSmokeTestLogLocation" value="${dir.DataRoomAnthillServerRunLocation}\test-logs"/>
+  <property name="file.DataRoomSmokeTestLog" value="UnitTestLogFile.xml"/>
+  <tstamp>
+    <format property="TODAY_US" pattern="d-MM-yyyy_hh.mm"/>
+  </tstamp>
+  
+  <if>
+	<isset property="Site"/>
+	<then>
+		<property name="environmentSite" value="${environment}${Site}"/>
+	</then>
+	<else>
+		<property name="environmentSite" value="${environment}"/>
+	</else>
+  </if>
+  
+  <property name="dir.DataRoomFinalTestResultLocation" value="${dir.DataRoomTestLocation}\test-results\smoke-tests\${environmentSite}"/>
+  <property name="dir.DataRoomTestReportLocation" value="${dir.DataRoomAnthillServerRunLocation}/TestsReports"/>
+  <property name="dir.DataRoomTestTempLocation" value="${dir.DataRoomAnthillServerRunLocation}/tempBuildDir"/>
+
+  <target name="-init" description="Initialize">
+  
+	<fail message="Environment property not set. Please set property -Denvironment='env'.">
+		<condition>
+			<not>
+				<isset property="environment"/>
+			</not>
+		</condition>
+	</fail>
+	
+    <if>
+	  <or>
+		<equals arg1="${environment}" arg2="ci"/>
+		<equals arg1="${environment}" arg2="demo"/>
+	  </or>
+      <then>
+        <var name="subEnvironmentDirectory" unset="true"/>
+        <var name="subEnvironmentDirectory" value="${version}\test-results"/>
+		<echo message="subEnvironmentDirectory = ${subEnvironmentDirectory}"/>
+      </then>
+      <else>
+        <var name="subEnvironmentDirectory" unset="true"/>
+        <var name="subEnvironmentDirectory" value="${version}_${TODAY_US}\test-results"/>
+      </else>
+    </if>
+
+    <echo>
+      - Smoke Test results are available at ${dir.DataRoomFinalTestResultLocation}\${subEnvironmentDirectory}\index.html
+      - Environment is ${environment}
+    </echo>
+
+    <delete dir="${dir.DataRoomAnthillServerRunLocation}" failonerror="false" includeemptydirs="true"/>
+
+    <echo>
+      - Creating the following folders
+      - ${dir.DataRoomAnthillServerRunLocation}
+      - ${dir.DataRoomSmokeTestLogLocation}
+      - ${dir.DataRoomTestResultsFolder}
+      - ${dir.DataRoomTestTempLocation}
+      - ./resources
+    </echo>
+    <mkdir dir="${dir.DataRoomAnthillServerRunLocation}"/>
+    <mkdir dir="${dir.DataRoomSmokeTestLogLocation}"/>
+    <mkdir dir="${dir.DataRoomTestTempLocation}"/>
+    <mkdir dir="./resources"/>
+
+    <echo>
+      - Copying files from ${dir.DataRoomTestJarLocation} to ${dir.DataRoomAnthillServerRunLocation}
+    </echo>
+    <echo message="To: ${dir.DataRoomAnthillServerRunLocation}"/>
+    <echo message="From: ${dir.DataRoomTestJarLocation}"/>
+    
+    <copy todir="${dir.DataRoomAnthillServerRunLocation}">
+      <fileset dir="${dir.DataRoomTestJarLocation}"/>
+    </copy>
+
+    <echo>
+      - Copying over QedTestConfig.xml file with environment specific version.
+    </echo>
+	
+	<!-- Need to determine whether a site is set to tell which test config file to use. -->
+	<var name="QedTestConfigSite" value=""/>
+	<if>
+		<or>
+			<equals arg1="${environment}" arg2="ci"/>
+			<equals arg1="${Site}" arg2=""/>
+		</or>
+		<then>
+			<var name="QedTestConfigSite" value=""/>
+		</then>
+		<else>
+			<if>
+				<isset property="Site"/>
+				<then>
+					<var name="QedTestConfigSite" value="Site${Site}"/>
+					<echo message="Setting site to ${Site}."/>
+				</then>
+				<else>
+					<var name="QedTestConfigSite" value=""/>
+				</else>
+			</if>
+		</else>
+	</if>	
+	
+	<!-- If the environment is CI or Demo we want to copy the environment config file over.
+		If it is QED or Prod we want to use the QED test config file.-->
+	<if>
+		<or>
+			<equals arg1="${environment}" arg2="ci"/>
+			<equals arg1="${environment}" arg2="demo"/>
+		</or>
+		<then>
+			<echo message="Copying test config file for ${environment}."/>
+			<copy file="${dir.DataRoomAntHillResourcesLocation}\configs\QedTestConfigFor${environment}${QedTestConfigSite}.xml" tofile="${dir.DataRoomAntHillResourcesLocation}\configs\QedTestConfig.xml" overwrite="true"/>
+			<echo message="Copy file '${dir.DataRoomAntHillResourcesLocation}\configs\QedTestConfigFor${environment}${QedTestConfigSite}.xml' to '${dir.DataRoomAntHillResourcesLocation}\configs\QedTestConfig.xml'."/>
+			<property name="dir.TestsToExecute" value="com/uslf/qed/dataroom/testcases/infrastructure/resourcechecks/*Check.class,com/uslf/qed/dataroom/testcases/operational/**/*.class"/>
+			<property name="dir.TestsToExclude" value="com/uslf/qed/dataroom/testcases/operational/Production*.class,com/uslf/qed/dataroom/testcases/operational/*Helper*.class"/>
+		</then>
+		<elseif>
+      <or>
+		<equals arg1="${environment}" arg2="qed"/>
+        <equals arg1="${environment}" arg2="qeddruk"/>
+      </or>
+      <then>
+        <echo message="Copying QED test config file for ${environment}."/>
+        <copy file="${dir.DataRoomAntHillResourcesLocation}\configs\QedTestConfigFor${environment}${QedTestConfigSite}.xml" tofile="${dir.DataRoomAntHillResourcesLocation}\configs\QedTestConfig.xml" overwrite="true"/>
+        <echo message="Copy file '${dir.DataRoomAntHillResourcesLocation}\configs\QedTestConfigFor${environment}${QedTestConfigSite}.xml' to '${dir.DataRoomAntHillResourcesLocation}\configs\QedTestConfig.xml'."/>
+        <property name="dir.TestsToExecute" value="com/uslf/qed/dataroom/testcases/operational/**/*.class"/>
+        <property name="dir.TestsToExclude" value="**/Production.class,**/OperationalHelper*.class"/>
+      </then>
+		</elseif>
+		<elseif>
+			<or>
+				<equals arg1="${environment}" arg2="prod"/>
+				<equals arg1="${environment}" arg2="proddruk"/>
+			</or>
+			<then>
+				<echo message="Copying Prod test config file for ${environment}."/>
+				<copy file="${dir.DataRoomAntHillResourcesLocation}\configs\QedTestConfigFor${environment}${QedTestConfigSite}.xml" tofile="${dir.DataRoomAntHillResourcesLocation}\configs\QedTestConfig.xml" overwrite="true"/>
+				<echo message="Copy file '${dir.DataRoomAntHillResourcesLocation}\configs\QedTestConfigFor${environment}${QedTestConfigSite}.xml' to '${dir.DataRoomAntHillResourcesLocation}\configs\QedTestConfig.xml'."/>
+				<property name="dir.TestsToExecute" value="com/uslf/qed/dataroom/testcases/operational/**/*.class"/>
+				<property name="dir.TestsToExclude" value="**/Production.class,**/OperationalHelper*.class"/>
+			</then>
+		</elseif>
+    <else>
+      <echo message="Copying Prod test config file for ${environment}."/>
+      <copy file="${dir.DataRoomAntHillResourcesLocation}\configs\QedTestConfigFor${environment}${QedTestConfigSite}.xml" tofile="${dir.DataRoomAntHillResourcesLocation}\configs\QedTestConfig.xml" overwrite="true"/>
+      <echo message="Copy file '${dir.DataRoomAntHillResourcesLocation}\configs\QedTestConfigFor${environment}${QedTestConfigSite}.xml' to '${dir.DataRoomAntHillResourcesLocation}\configs\QedTestConfig.xml'."/>
+      <property name="dir.TestsToExecute" value="com/uslf/qed/dataroom/testcases/operational/**/*.class"/>
+      <property name="dir.TestsToExclude" value="**/Production.class,**/OperationalHelper*.class"/>
+    </else>
+	</if>
+
+    <loadfile property="message" srcFile="${dir.DataRoomAntHillResourcesLocation}\configs\QedTestConfig.xml"/>
+	<echo message="Config File Contents: ${message}"/>
+
+    <echo>
+      - Copying files from ${dir.DataRoomAntHillResourcesLocation} to ./resources
+    </echo>
+    <copy todir="./resources">
+      <fileset dir="${dir.DataRoomAntHillResourcesLocation}"/>
+    </copy>
+	
+	<ant antfile="CleanNASSpace.xml" target="-cleanNAS" dir="C:\CleanNASSpace">
+		<property name="env" value="${environmentSite}"/>
+		<property name="nasLocation" value="${dir.DataRoomFinalTestResultLocation}"/>
+	</ant>
+
+  </target>
+
+
+  <target name="-junit" depends="-init" description="Executes JUnit test cases, logs results, and generates a report.">
+    <echo message="Starting the Smoke Tests"/>
+
+    <condition property="dir.TestResultsFolder" value="${dir.DataRoomTestTempLocation}">
+      <not>
+        <isset property="dir.TestResultsFolder"/>
+      </not>
+    </condition>
+
+    <junit fork="on" forkmode="once" haltonfailure="false" showoutput="on" printsummary="on" failureproperty="tests.failed">
+      <classpath>
+        <fileset dir="${dir.DataRoomAnthillServerRunLocation}">
+          <include name="**/*.jar"/>
+        </fileset>
+        <fileset dir="${dir.DataRoomAntHillLibLocation}">
+          <include name="**/*.jar"/>
+        </fileset>
+      </classpath>
+
+      <formatter type="xml" usefile="yes"/>
+
+      <batchtest todir="${dir.DataRoomSmokeTestLogLocation}">
+        <zipfileset src="${file.DataRoomSmokeTestJar}"
+					includes="${dir.TestsToExecute}" excludes="${dir.TestsToExclude}"/>
+      </batchtest>
+
+    </junit>
+
+    <junitreport todir="${dir.TestResultsFolder}" tofile="${file.DataRoomSmokeTestLog}">
+      <fileset dir="${dir.DataRoomSmokeTestLogLocation}">
+        <include name="TEST-*.xml"/>
+      </fileset>
+      <report format="frames" todir="${dir.DataRoomTestReportLocation}"/>
+    </junitreport>
+
+	<echo message="Copying files '${dir.DataRoomTestReportLocation} to '${dir.DataRoomFinalTestResultLocation}\${subEnvironmentDirectory}'."/>
+    <copy todir="${dir.DataRoomFinalTestResultLocation}\${subEnvironmentDirectory}">
+      <fileset dir="${dir.DataRoomTestReportLocation}"/>
+    </copy>
+
+    <!-- dont fail the build if a test failed, then we wont be able to consolidate the test results because it cause the jenkins build to stop in its tracks.
+    <fail if="tests.failed">
+      One or more tests failed!
+      For more information check the log files created under the logs folder- ${dir.DataRoomFinalTestResultLocation}\${subEnvironmentDirectory}
+	  For dev support email Central Tech - Support"
+    </fail>
+    -->
+
+	<ant antfile="HistorySmokeTestAntScript.xml" inheritAll="false">
+		<property name="env" value="${environmentSite}"/>
+		<property name="version" value="${version}"/>
+	</ant>
+	
+	<ant antfile="DocCompareSmokeTestAntScript.xml" inheritAll="false">
+		<property name="env" value="${environmentSite}"/>
+		<property name="version" value="${version}"/>
+	</ant>
+	
+  	<ant antfile="FileTransformerSmokeTestAntScript.xml" inheritAll="false">
+		<property name="env" value="${environmentSite}"/>
+		<property name="version" value="${version}"/>
+	</ant>
+
+    <ant antfile="DeliverSmokeTestAntScript.xml" inheritAll="false">
+      <property name="env" value="${environmentSite}"/>
+      <property name="version" value="${version}"/>
+    </ant>
+
+  	 
+  	<ant antfile="AccessManagementSmokeTestAntScript.xml" inheritAll="false">
+		  <property name="env" value="${environmentSite}"/>
+		  <property name="version" value="${version}"/>
+	  </ant>
+		
+	<!-- commenting out workflow as we stopped deploying it per mail from Mike Berg.
+	<ant antfile="WorkflowSmokeTestAntScript.xml" inheritAll="false">
+		<property name="env" value="${environmentSite}"/>
+		<property name="version" value="${version}"/>
+	</ant>
+	-->
+	
+  </target>
+
+</project>
