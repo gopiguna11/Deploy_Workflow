@@ -1,0 +1,253 @@
+<project name="Deploy_Release_Set" default="deployVerticals" basedir=".">
+    <property environment="machineEnvironment" />
+    <property file="deploy${deployEnv}.properties" />
+
+    <!-- Must pass in these values for the deploy to run. -->
+    	<property name="version" value="" />
+    	<property name="forceBuild" value="false" />
+    	<property name="isDryRun" value="false" />
+    	<property name="deployEnv" value="" />
+    	<property name="environmentId" value="" />
+    	<property name="project" value="" />
+    	<property name="runSchemaValidation" value="true"/>
+    	<property name="release.nas.user" value="mgmt\s.PlatformGrp.CM"/>
+    	<property name="release.nas.password" value=""/>
+	<property name="keypath" value="C:\jenkins\ssh\id_dsa.ppk"/>
+
+	
+	<property name="release.nas.servername" value="cobaltreleaseqc.int.westgroup.com"/>
+	<property name="releaseNASLocation" location="\\${release.nas.servername}\cobaltReleaseqc$" />
+	<property name="releaseSetFile" location="${releaseNASLocation}\releaseSet\${version}\release.xml" />
+	<property name="releaseNASLoc.Foldering" location="${releaseNASLocation}\Foldering" />
+
+	
+
+    	<property name="tempLocation" value="${machineEnvironment.TEMP}\AntHill${deployEnv}Deploy" />
+
+    <!-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
+    Identify the external ant-contrib add-on here. Used in the -copyScripts target.
+   - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -->
+    <taskdef resource="net/sf/antcontrib/antlib.xml" />
+    <!-- <taskdef resource="net/sf/antcontrib/antlib.xml">
+  <classpath>
+    <pathelement location="C:\Ant\apache-ant-1.9.3\lib\ant-contrib-1.0b3.jar"/>	  
+  </classpath>
+</taskdef> -->
+    
+    <!-- =================================================================================================
+        target: deployVerticals
+        description: Call the different targets in sequence by using the depends attribute of the target.
+
+        Note:
+        The <AntCall> task is not used because properties set within a target called using <AntCall>
+        do not retain their values in the current ANT project. Since this is a primary requirement
+        in the logic used in this script, we call the different targets using the depends flag.   
+     ================================================================================================== -->
+    <target name="deployVerticals" depends="init, deploy">
+        <echo level="info">Deployment to ${deployEnv} environment is completed successfully.</echo>
+    </target>
+
+    <!-- ====================================================================================== 
+        target: -init
+        description: Initialize all required parameters. Check if all necessary properties
+                     are set and required resources are avalable. 
+     ====================================================================================== -->
+    <target name="security.db_update" depends="init">
+		<propertyregex property="regIntControllerVersion"
+		  input="${releaseSetContents}"
+		  regexp="Application buildnum=\&quot;([^\&quot;]*)\&quot; name=&quot;regIntController&quot;/&gt;"
+		  select="\1"
+		  casesensitive="false" />
+		<echo>regIntControllerVersion = ${regIntControllerVersion} </echo>	  
+		<if>
+			<isfalse value="${isDryRun}"/>
+			<then>
+				<echo>Dry run is set to false - will update database with regIntController version 
+				</echo>
+				<if>
+					<not>
+						<isset property="regIntControllerVersion" />
+					</not>
+					<then>
+						<fail message="regIntControllerVersion not parsed from release.xml file. regIntControllerVersion is used to update security.db database and is needed for deploy to continue.  Verify the release.xml contains regIntController information and that it is being parsed correctly per the propertyregex"/>
+					</then>
+					<else>
+						<sql
+							driver="${db.driver}" url="${db.url}" userid="${db.user}" password="${db.pw}" print="true" onerror="stop"
+							><![CDATA[
+
+							UPDATE GRC_SECURITY.PRODUCT_CONFIGURATION
+							SET STATIC_URL = '${db.baseurl}/${regIntControllerVersion}/js/ri'
+							WHERE ID = 'RI_PRODUCT_CONFIGURATION';
+
+							select STATIC_URL from GRC_SECURITY.PRODUCT_CONFIGURATION
+							WHERE ID = 'RI_PRODUCT_CONFIGURATION';
+
+							]]>
+						</sql>
+					</else>
+				</if>
+			</then>
+			<else>
+				<echo>Dry run is set to true - will not update database with regIntController version 
+				</echo>
+			</else>
+		</if>
+	</target>
+	<target name="init">	
+		<antcall target="connect"/>
+        <echo level="verbose" message="Release Set Version: ${version}" />
+        <fail message="Release Set version is not specified. Cannot continue with the deployment.">
+            <condition>
+                <or>
+                    <not>
+                        <isset property="version" />
+                    </not>
+                    <!-- Cannot use the length tag since it does not exists for ant 1.6.2 (the version anthill uses!) -->
+                    <equals arg1="${version}" arg2="" trim="true" />
+                </or>
+            </condition>
+        </fail>
+		
+		<fail message="Script name is not specified. Cannot continue with the deployment.">
+            <condition>
+                <or>
+                    <not>
+                        <isset property="scriptName" />
+                    </not>
+                    <!-- Cannot use the length tag since it does not exists for ant 1.6.2 (the version anthill uses!) -->
+                    <equals arg1="${scriptName}" arg2="" trim="true" />
+                </or>
+            </condition>
+        </fail>
+		
+		<fail message="Site is not specified. Cannot continue with the deployment.">
+            <condition>
+                <or>
+                    <not>
+                        <isset property="site" />
+                    </not>
+                    <equals arg1="${site}" arg2="" trim="true" />
+                </or>
+            </condition>
+        </fail>
+		
+		<fail message="DeployEnv is not specified. Cannot continue with the deployment.">
+            <condition>
+                <or>
+                    <not>
+                        <isset property="deployEnv" />
+                    </not>
+                    <!-- Cannot use the length tag since it does not exists for ant 1.6.2 (the version anthill uses!) -->
+                    <equals arg1="${deployEnv}" arg2="" trim="true" />
+                </or>
+            </condition>
+        </fail>
+
+        <echo level="verbose" message="Expected location for the Release Set file: '${releaseSetFile}'" />
+        <available file="${releaseSetFile}" property="releaseFileExists" type="file" />
+
+        <fail unless="releaseFileExists" message="Release set file does not exist at location '${releaseSetFile}'. Cannot continue with deployment." />
+
+        <if>
+			<not>
+				<equals arg1="${isDryRun}" arg2="false" />
+			</not>
+            <then>
+				<echo level="info">
+                    "DryRun Deployment" mode in effect. Normally would have deleted directory "${tempLocation}" and recreated it!.
+                </echo>
+                <mkdir dir="${tempLocation}" />
+            </then>
+            <else>
+                <echo level="info" message="Cleaning up the temporary folder ('${tempLocation}') to store the reponse from the deployment database updater." />
+                <delete dir="${tempLocation}" failonerror="false" includeemptydirs="true" casesensitive="false" />
+                <mkdir dir="${tempLocation}" />
+            </else>
+        </if>
+
+        <!-- Load the contents of the release set file. -->
+        <loadfile property="releaseSetContents" srcfile="${releaseSetFile}" failonerror="true" encoding="utf-8">
+            <filterchain>
+                <linecontains>
+                    <contains value="Application" />
+                </linecontains>
+            </filterchain>
+        </loadfile>
+
+		<echo level="info">
+        ********************************************************************************************************************
+            Release Set file location: ${releaseSetFile}
+            Release Set Version: ${version}
+
+            Contents of Release Set File:
+            -------------------------------------------------
+            ${releaseSetContents}
+            -------------------------------------------------
+        ********************************************************************************************************************
+        </echo>
+
+        <!-- Load the contents of the release set file as propeties for the ant script -->
+        <xmlproperty file="${releaseSetFile}" collapseattributes="true" />
+    </target>
+    <!-- ====================================================================================== 
+        target: -deploy
+        description: Execute the deployment using the deployment engine.
+     ====================================================================================== -->
+    <target name="deploy">
+		<tstamp>
+			<format property="BEGIN_DEPLOY" pattern="MM/dd/yyyy hh:mm:ss:SS" locale="en, US"/>
+		</tstamp>
+		<echo message="Beginning deploy at ${BEGIN_DEPLOY}"/>
+	
+        <echo level="info" message="Executing SSH command for deploying the applications using the deployment engine." />
+		
+			<if>
+				<isset property="limitedApplications"/>
+				<then>
+					<echo level="info" message="limitedApplications = '${limitedApplications}'"/>
+					<var name="cmdToExecute" value="cd /appserver/deployment;./${scriptName} ${version} username=${NODE_AGENT_USER} password=${NODE_AGENT_PASSWORD} forcedeployment=${forceBuild} limitSite=${site} dryRun=${isDryRun} limitApplications=${limitedApplications}"/>
+				</then>
+				<else>
+					<var name="cmdToExecute" value="cd /appserver/deployment;./${scriptName} ${version} username=${NODE_AGENT_USER} password=${NODE_AGENT_PASSWORD} forcedeployment=${forceBuild} limitSite=${site} dryRun=${isDryRun}"/>
+				</else>
+			</if>
+			
+			<echo level="verbose">
+				host="${DEPLOY_SERVER}" 
+				username="${CURRENT_USER}" 
+				trust="yes" 
+				command="${cmdToExecute}"
+			</echo>
+
+			<sshexec host="${DEPLOY_SERVER}" username="${CURRENT_USER}" keyfile="${keypath}" trust="yes" 
+					 command="${cmdToExecute}" />
+
+			<echo level="info">
+				Ran the deployment ...
+				Command that would have been executed = "${cmdToExecute}"
+			</echo>
+			
+		<tstamp>
+			<format property="END_DEPLOY" pattern="MM/dd/yyyy hh:mm:ss:SS" locale="en, US"/>
+		</tstamp>
+		<echo message="Ending deploy at ${END_DEPLOY}"/>
+			
+    </target>
+    <target name="connect">
+      <exec executable="net">
+        <arg value="use"/>
+        <arg value="\\${release.nas.servername}"/>
+        <arg value="/USER:${release.nas.user}"/>
+        <arg value="${release.nas.password}"/>
+      </exec>
+    </target>
+    <!-- disconnect from the machine -->
+    <target name="disconnect">
+      <exec executable="net">
+        <arg value="use"/>
+        <arg value="\\${release.nas.servername}"/>
+        <arg value="/DELETE"/>
+      </exec>
+    </target>
+</project>
