@@ -1,0 +1,755 @@
+<project name="Deploy_Release_Set" default="deployVerticals" basedir=".">
+    <property environment="machineEnvironment" />
+    <property file="deploy${deployEnv}.properties" />
+
+    <!-- Must pass in these values for the deploy to run. -->
+    	<property name="version" value="" />
+    	<property name="forceBuild" value="false" />
+    	<property name="isDryRun" value="false" />
+    	<property name="deployEnv" value="" />
+    	<property name="environmentId" value="" />
+    	<property name="project" value="" />
+    	<property name="runSchemaValidation" value="true"/>
+    	<!-- property name="release.nas.user" value="ecomqc\svctfsngservice"/> -->
+      <property name="release.nas.user" value="mgmt\s.PlatformGrp.CM"/>
+    	<property name="release.nas.password" value=""/>
+		<property name="keypath" value="C:\jenkins\ssh\id_dsa.ppk"/>
+	<echo>environmentId = ${environmentId} </echo>
+	
+	<property name="release.nas.servername" value="cobaltreleaseqc.int.westgroup.com"/>
+	<property name="releaseNASLocation" location="\\${release.nas.servername}\cobaltreleaseqc$" />
+	<property name="releaseSetFile" location="${releaseNASLocation}\releaseSet\${version}\release.xml" />
+	<property name="releaseNASLoc.Foldering" location="${releaseNASLocation}\Foldering" />
+
+    	<property name="tempLocation" value="${machineEnvironment.TEMP}\AntHill${deployEnv}Deploy" />
+
+    <!-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
+    Identify the external ant-contrib add-on here. Used in the -copyScripts target.
+   - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -->
+    <taskdef resource="net/sf/antcontrib/antlib.xml" />
+
+    <!-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
+    Identify the external Foldering's schema validation add-on here.
+    - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -->
+    <taskdef name="ReadSchemaVersionFileAndCallWebApp" classname="com.trgr.cobalt.ant.ReadSchemaVersionFileAndCallWebApp" />
+    <taskdef name="groovy" classname="org.codehaus.groovy.ant.Groovy" />
+
+    <!-- =================================================================================================
+        target: deployVerticals
+        description: Call the different targets in sequence by using the depends attribute of the target.
+
+        Note:
+        The <AntCall> task is not used because properties set within a target called using <AntCall>
+        do not retain their values in the current ANT project. Since this is a primary requirement
+        in the logic used in this script, we call the different targets using the depends flag.   
+     ================================================================================================== -->
+    <target name="deployVerticals" depends="-init, -preDeploySetup, -deploy, -postDeploySetup">
+        <echo level="info">Deployment to ${deployEnv} environment is completed successfully.</echo>
+    </target>
+
+    <!-- ====================================================================================== 
+        target: -init
+        description: Initialize all required parameters. Check if all necessary properties
+                     are set and required resources are avalable. 
+     ====================================================================================== -->
+    <target name="-init">	
+		<antcall target="connect"/>
+        <echo level="verbose" message="Release Set Version: ${version}" />
+        <fail message="Release Set version is not specified. Cannot continue with the deployment.">
+            <condition>
+                <or>
+                    <not>
+                        <isset property="version" />
+                    </not>
+                    <!-- Cannot use the length tag since it does not exists for ant 1.6.2 (the version anthill uses!) -->
+                    <equals arg1="${version}" arg2="" trim="true" />
+                </or>
+            </condition>
+        </fail>
+		
+		<fail message="Script name is not specified. Cannot continue with the deployment.">
+            <condition>
+                <or>
+                    <not>
+                        <isset property="scriptName" />
+                    </not>
+                    <!-- Cannot use the length tag since it does not exists for ant 1.6.2 (the version anthill uses!) -->
+                    <equals arg1="${scriptName}" arg2="" trim="true" />
+                </or>
+            </condition>
+        </fail>
+		
+		<fail message="Site is not specified. Cannot continue with the deployment.">
+            <condition>
+                <or>
+                    <not>
+                        <isset property="site" />
+                    </not>
+                    <equals arg1="${site}" arg2="" trim="true" />
+                </or>
+            </condition>
+        </fail>
+		
+		<fail message="DeployEnv is not specified. Cannot continue with the deployment.">
+            <condition>
+                <or>
+                    <not>
+                        <isset property="deployEnv" />
+                    </not>
+                    <!-- Cannot use the length tag since it does not exists for ant 1.6.2 (the version anthill uses!) -->
+                    <equals arg1="${deployEnv}" arg2="" trim="true" />
+                </or>
+            </condition>
+        </fail>
+
+        <echo level="verbose" message="Expected location for the Release Set file: '${releaseSetFile}'" />
+        <available file="${releaseSetFile}" property="releaseFileExists" type="file" />
+
+        <fail unless="releaseFileExists" message="Release set file does not exist at location '${releaseSetFile}'. Cannot continue with deployment." />
+
+        <if>
+			<not>
+				<equals arg1="${isDryRun}" arg2="false" />
+			</not>
+            <then>
+				<echo level="info">
+                    "DryRun Deployment" mode in effect. Normally would have deleted directory "${tempLocation}" and recreated it!.
+                </echo>
+                <mkdir dir="${tempLocation}" />
+            </then>
+            <else>
+                <echo level="info" message="Cleaning up the temporary folder ('${tempLocation}') to store the reponse from the deployment database updater." />
+                <delete dir="${tempLocation}" failonerror="false" includeemptydirs="true" casesensitive="false" />
+                <mkdir dir="${tempLocation}" />
+            </else>
+        </if>
+
+        <!-- Load the contents of the release set file. -->
+        <loadfile property="releaseSetContents" srcfile="${releaseSetFile}" failonerror="true" encoding="utf-8">
+            <filterchain>
+                <linecontains>
+                    <contains value="Application" />
+                </linecontains>
+            </filterchain>
+        </loadfile>
+
+        <echo level="info">
+        ********************************************************************************************************************
+            Release Set file location: ${releaseSetFile}
+            Release Set Version: ${version}
+
+            Contents of Release Set File:
+            -------------------------------------------------
+            ${releaseSetContents}
+            -------------------------------------------------
+        ********************************************************************************************************************
+        </echo>
+
+        <!-- Load the contents of the release set file as propeties for the ant script -->
+        <xmlproperty file="${releaseSetFile}" collapseattributes="true" />
+    </target>
+    <target name="connect">
+      <exec executable="net">
+        <arg value="use"/>
+        <arg value="\\${release.nas.servername}"/>
+        <arg value="/USER:${release.nas.user}"/>
+        <arg value="${release.nas.password}"/>
+      </exec>
+    </target>
+    <!-- disconnect from the machine -->
+    <target name="disconnect">
+      <exec executable="net">
+        <arg value="use"/>
+        <arg value="\\${release.nas.servername}"/>
+        <arg value="/DELETE"/>
+      </exec>
+    </target>
+
+    <!-- ====================================================================================== 
+        target: -deploy
+        description: Execute the deployment using the deployment engine.
+     ====================================================================================== -->
+    <target name="-deploy">
+		<tstamp>
+			<format property="BEGIN_DEPLOY" pattern="MM/dd/yyyy hh:mm:ss:SS" locale="en, US"/>
+		</tstamp>
+		<echo message="Beginning deploy at ${BEGIN_DEPLOY}"/>
+	
+        <echo level="info" message="Executing SSH command for deploying the applications using the deployment engine." />
+		
+			<if>
+				<isset property="limitedApplications"/>
+				<then>
+					<echo level="info" message="limitedApplications = '${limitedApplications}'"/>
+					<var name="cmdToExecute" value="cd /appserver/deployment;./${scriptName} ${version} username=${NODE_AGENT_USER} password=${NODE_AGENT_PASSWORD} forcedeployment=${forceBuild} limitSite=${site} dryRun=${isDryRun} limitApplications=${limitedApplications}"/>
+				</then>
+				<else>
+					<var name="cmdToExecute" value="cd /appserver/deployment;./${scriptName} ${version} username=${NODE_AGENT_USER} password=${NODE_AGENT_PASSWORD} forcedeployment=${forceBuild} limitSite=${site} dryRun=${isDryRun}"/>
+				</else>
+			</if>
+			
+			<echo level="verbose">
+				host="${DEPLOY_SERVER}" 
+				username="${CURRENT_USER}" 
+				trust="yes" 
+				command="${cmdToExecute}"
+			</echo>
+
+			<sshexec host="${DEPLOY_SERVER}" username="${CURRENT_USER}" keyfile="${keypath}" trust="yes" 
+					 command="${cmdToExecute}" />
+
+			<echo level="info">
+				Ran the deployment ...
+				Command that would have been executed = "${cmdToExecute}"
+			</echo>
+			
+		<tstamp>
+			<format property="END_DEPLOY" pattern="MM/dd/yyyy hh:mm:ss:SS" locale="en, US"/>
+		</tstamp>
+		<echo message="Ending deploy at ${END_DEPLOY}"/>
+			
+    </target>
+
+    <!-- ================================================================================== 
+        target: -updateDatabaseInfo
+        description: Update the deployment database (using the asp.net page interface)
+                     to indicate the status of the verticals that will be/was deployed.
+
+        The following properties are set in this target (only when called for the first time):
+        1. foldering.version = Indicates the Foldering vertical's build number that will 
+                               be deployed in this release set.
+        2. billing.version   = Indicates the Billing application's build number that will 
+                               be deployed in this release set.
+        3. harvester.version = Indicates the Harvester application's build number that will 
+                               be deployed in this release set.
+        4. uds.version       = Indicates the UDS vertical's build number that will be 
+                               deployed in this release set.
+        5. udsCache.version  = Indicates the UDS Seralized's build number that will be 
+                               deployed in this release set.
+     ================================================================================== -->
+    <target name="-updateDatabaseInfo">
+    <!-- 
+        Check if the deploy.status property was set. If it is not set then it indicates that this target was called 
+        for the first time and hence the deployment database has to be updated with a FAILED status for the verticals 
+        that will be deployed. 
+
+        If the property is already set, then it indicates that the target was called the second time. In this case the 
+        deployment database will be updated with the status of SUCCESSFUL for the verticals that have been deployed.
+    -->
+		<tstamp>
+			<format property="BEGIN_UPDATE_DB_INFO" pattern="MM/dd/yyyy hh:mm:ss:SS" locale="en, US"/>
+		</tstamp>
+		<echo message="Beginning DB update at ${BEGIN_UPDATE_DB_INFO}"/>
+		
+        <property name="DbUpdateFailed" value="FALSE" />
+        <if>
+            <and>
+                <isset property="deploy.status" />
+                <equals arg1="${deploy.status}" arg2="FAILED" />
+            </and>
+            <then>
+                <!-- The property was already set to FAILED. Set it to SUCCESSFUL -->
+                <var name="deploy.status" unset="true" />
+                <var name="deploy.status" value="SUCCESSFUL" />
+            </then>
+            <else>
+                <!-- The property is not set. Set it to FAILED -->
+                <var name="deploy.status" unset="true" />
+                <var name="deploy.status" value="FAILED" />
+            </else>
+        </if>
+
+        <if>
+			<not>
+				<equals arg1="${isDryRun}" arg2="false" />
+			</not>
+            <then>
+				<var name="isDummyDeploy" unset="true"/>
+                <var name="isDummyDeploy" value="FALSE"/>
+            </then>
+            <else>
+                <var name="isDummyDeploy" unset="true"/>
+                <var name="isDummyDeploy" value="TRUE"/>
+            </else>
+        </if>
+        <!-- Update the deployment datbase with the Release Set that is being deployed -->
+        <if>
+			<not>
+				<equals arg1="${isDryRun}" arg2="false"/>
+			</not>
+			<then>
+				<echo message="Would have updated the database with releaseSet=${version} if dryRun was not set to ${isDryRun}." />
+			</then>	
+			<elseif>
+				<equals arg1="${deploy.status}" arg2="FAILED" />
+				<then>
+					<antcall target="-DeployDbUpdate_PreDeploy_ReleaseSet" inheritall="false" inheritrefs="false">
+						<param name="releaseSetversion" value="${version}" />
+					</antcall>
+				</then>
+			</elseif>
+			<elseif>
+				<equals arg1="${deploy.status}" arg2="SUCCESSFUL" />
+				<then>
+					<antcall target="-DeployDbUpdate_PostDeploy_ReleaseSet" inheritall="false" inheritrefs="false">
+						<param name="releaseSetversion" value="${version}" />
+					</antcall>
+				</then>
+			</elseif>
+        </if>
+
+		<groovy>
+            // UTF-8 signature files cannot be read and unfortunaltey the relase set is generated using UTF-8 with signature!
+            //def dependencyRoot = new XmlParser().parseText("${properties.releaseSetContents}")
+			ant.echo(message:"Release set File is '${properties.releaseSetFile}'")
+            def dependencyRoot = new XmlSlurper().parse("${properties.releaseSetFile}")
+
+            // Loop through all the applications that should be deployed and update the deployment information database with the results.
+            for (i in 0..dependencyRoot.children().Application.size()-1)
+            {
+				ant.echo(message:"Looping all applications.")
+                def appName = dependencyRoot.children().Application[i];
+                def product = "";
+                def ver = "";
+                def resultFile = ""
+                def UrlToCall = ""
+
+                // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
+                                        <!-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
+                //   Check if a certain vertical/application is being deployed and set it's property
+                //   accordingly. These properties will indicate the build/version number of the application
+                // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+                                        If the application is "Billing" then set its version number to indicate 
+                                             that the application (with the build number that is set) will be deployed. -->
+                if ("${appName.@name}".toLowerCase() == "billing")
+                {
+                    properties["billing.version"] = appName.@buildnum;
+                }
+                else if ("${appName.@name}".toLowerCase() == "harvester")
+                {
+                    properties["harvester.version"] = appName.@buildnum;
+                }
+                else if ("${appName.@name}".toLowerCase() == "foldering")
+                {
+                    properties["foldering.version"] = appName.@buildnum;
+                }
+                else if ("${appName.@name}".toLowerCase() == "uds")
+                {
+                    properties["uds.version"] = appName.@buildnum;
+                }
+				else if ("${appName.@name}".toLowerCase() == "website")
+                {
+                    properties["website.version"] = appName.@buildnum;
+                }
+				else if ("${appName.@name}".toLowerCase() == "document")
+                {
+                    properties["document.version"] = appName.@buildnum;
+                }
+
+                if(appName.children().size() != 0)
+                {
+                    // Get the Berkeley Product and Version information
+                    appName.children().each
+                    {
+                        if (it.name() == "Berkeley")
+                        {
+                            if (product.length() != 0) { product += "," }
+                            product += it.@Product;
+                            if (ver.length() != 0) { ver += "," }
+                            ver += it.@Version;
+                        }
+                    }
+                }
+                if (properties["deploy.status"] == "FAILED")
+                {
+					ant.echo(message:"deploy.status equals 'FAILED'. Add the application information to the database")
+                    // Add the application information to the database.
+                    UrlToCall = "http://deploymentdatabaseservices.int.thomson.com:8080/DID/deployed.aspx?environment=${properties.deployEnv}&amp;vertical=${appName.@name}&amp;version=${appName.@buildnum}&amp;releaseSet=${properties.version}&amp;berkeleyProduct=${product}&amp;berkeleyVersion=${ver}"
+                    ant.echo(message:"Updating the database for application '${appName.@name}' and version '${appName.@buildnum}' with a status of 'FAILED' using the URL ${UrlToCall}", level:"info")
+                    // Set the results file for the Pre-Deploy step.
+                    resultFile = "${properties.tempLocation}\\${appName.@name}.xml"
+                }
+                else
+                {
+					ant.echo(message:"deploy.status NOT equal to 'FAILED'. Get the DHID from the veritcal's file saved earlier.")
+                    // Get the DHID from the vertical's file saved earlier
+                    def checkResultFile = new File("${properties.tempLocation}\\${appName.@name}.xml")
+                    if(checkResultFile.exists())
+                    {
+						ant.echo(message:"The DHID file exists")
+                        // Verify if the DHID exists in the file.
+                        def docElement = new XmlSlurper().parse("${checkResultFile.getPath()}")
+                        if (docElement.DeployedHistory.DHID.text() != "")
+                        {
+                            ant.echo(message:"Sucessfully extracted the DHID of the vertical.")
+
+                            UrlToCall = "http://deploymentdatabaseservices.int.thomson.com:8080/DID/deployed.aspx?dhid=${docElement.DeployedHistory.DHID.text()}&amp;status=SUCCESSFUL"          
+
+                            ant.echo(message:"Updating the database for application '${appName.@name}' and version '${appName.@buildnum}' with a status of 'SUCCESSFUL' using the URL ${UrlToCall}", level:"info")
+                            // Set the results file for the Pre-Deploy step.
+                            resultFile = "${properties.tempLocation}\\${appName.@name}.statusUpdateLog.xml"
+                        }
+                        else
+                        {
+                            def msg = """
+                                Cannot find the DHID tag (in file '${checkResultFile.getPath()}') to update the deployment status of the vertical '${appName.@name}' for version '${appName.@buildnum}'
+                                Skipping the step for updating the deployment database.
+                            """
+                            ant.echo(message:"${msg}", level:"error")
+                            properties.DbUpdateFailed = "TRUE"
+                        }
+                    }
+                    else
+                    {
+                        ant.echo(message:"Skipping the process to update the deployment database for vertical '${appName.@name}' since the response file was not located at '${properties.tempLocation}\\${appName.@name}.xml'", level:"warning") 
+                    }
+                }
+
+                if (properties["isDryRun"] != "false")
+                {
+					ant.echo(message:"DryRun equals 'false'. Would normally attempt to update DB.")
+                    println "Calling the deployment information database's web application to indicate a new ${properties.deployEnv} deployment."
+                    println "Command that would be executed = '${UrlToCall}'"
+
+                    // Create the response file
+                    ant.echo(file:"${resultFile}", """
+                        &lt;DocumentElement&gt;
+                          &lt;DeployedHistory&gt;
+                            &lt;EnvironmentID&gt;2&lt;/EnvironmentID&gt;
+                            &lt;VerticalID&gt;5&lt;/VerticalID&gt;
+                            &lt;DeploymentDatetime&gt;2009-09-03T14:16:57.35-05:00&lt;/DeploymentDatetime&gt;
+                            &lt;Version&gt;6.5.3&lt;/Version&gt;
+                            &lt;DHID&gt;2761b84f-2434-4ff2-8779-6234977db156&lt;/DHID&gt;
+                            &lt;Status&gt;FAILED&lt;/Status&gt;
+                            &lt;ReleaseSetId&gt;4&lt;/ReleaseSetId&gt;
+                          &lt;/DeployedHistory&gt;
+                        &lt;/DocumentElement&gt;
+                    """)
+
+                    ant.echo(file:"${resultFile}", """
+                        &lt;DocumentElement&gt;
+                          &lt;DeployedHistory&gt;
+                            &lt;EnvironmentID&gt;2&lt;/EnvironmentID&gt;
+                            &lt;VerticalID&gt;5&lt;/VerticalID&gt;
+                            &lt;DeploymentDatetime&gt;2009-09-03T14:16:57.35-05:00&lt;/DeploymentDatetime&gt;
+                            &lt;Version&gt;6.5.3&lt;/Version&gt;
+                            &lt;DHID&gt;2761b84f-2434-4ff2-8779-6234977db156&lt;/DHID&gt;
+                            &lt;Status&gt;SUCCESSFUL&lt;/Status&gt;
+                            &lt;ReleaseSetId&gt;4&lt;/ReleaseSetId&gt;
+                          &lt;/DeployedHistory&gt;
+                        &lt;/DocumentElement&gt;
+                    """)
+                }
+                else
+                {
+					ant.echo(message:"DryRun NOT equal to 'false'. Updating DB with ${UrlToCall}.")
+                    def outFile = new BufferedOutputStream( new FileOutputStream("${resultFile}"))
+                    outFile &lt;&lt; new URL("${UrlToCall}").openStream()
+                    outFile.close()
+                }
+                // Verify if the the call to the web page succedded
+                def checkResultFile = new File("${properties.tempLocation}\\${appName.@name}.xml")
+                if(checkResultFile.exists())
+                {
+					ant.echo(message:"CheckResultFile exists. Verifying the update succeeded.")
+                    // Verify if the update succeded.
+                    def docElement = new XmlSlurper().parse("${properties.tempLocation}\\${appName.@name}.xml")
+                    if (docElement.name() == "ERROR")
+                    {
+						ant.echo(message:"DocElement.Name == 'ERROR'. Unable to update the DB")
+                        def msg = """
+                            Unable to update the deployment database with version '${appName.@buildnum}' for vertical '${appName.@name}'.
+                            Error: ${docElement.text()}
+
+                            Command used: '${UrlToCall}' """
+
+                        ant.echo(message:"${msg}", level:"error")
+                        properties.DbUpdateFailed = "TRUE"    		
+                    }
+                    else
+                    {
+                        ant.echo(message:"The deployment database was sucessfully updated.", level:"info")
+                    }
+                }
+                else
+                {
+                    def msg = """
+                        Unable to update the deployment database with version '${appName.@buildnum}' for vertical '${appName.@name}'.
+                        Error: Cannot connect to the deployment database service application (or there was some other internal error!
+
+                    Command used: "${UrlToCall}"""
+
+                    ant.echo(message:"${msg}", level:"error")
+                    properties.DbUpdateFailed = "TRUE"    		
+                }
+            }
+        </groovy>
+		
+		<!-- If the vertical is "UDS" then set its version number to indicate 
+			 that the vertical (with the build number that is set) will be deployed. -->
+		<if>
+            <and>
+                <isset property="DbUpdateFailed" />
+                <equals arg1="${DbUpdateFailed}" arg2="TRUE" />
+            </and>
+			<then>
+				<!-- Do an initial update to the database -->
+                <fail message="One or more database updates failed causing the build to fail." />
+			</then>
+			<!-- Do an final update to the database -->
+		</if>
+		
+		<tstamp>
+			<format property="END_UPDATE_DB_INFO" pattern="MM/dd/yyyy hh:mm:ss:SS" locale="en, US"/>
+		</tstamp>
+		<echo message="Ending DB update at ${END_UPDATE_DB_INFO}"/>
+    </target>
+
+    <!-- ================================================================================== 
+        target: -DeployDbUpdate_PreDeploy_ReleaseSet
+        description: This target will update the Deployment Database, with the Pre-Deploy 
+                     status for the current Release Set.
+
+                     Since this target is called using "antcall" the properties set here
+                     are local to this target and is perfect for our needs.
+     ================================================================================== -->
+    <target name="-DeployDbUpdate_PreDeploy_ReleaseSet">
+        <echo level="info" message="Updating the deployment database for the Release Set with a status of 'FAILED'" />
+        <!-- Make sure this property has the same value as that in "DeployDbUpdate_PostDeploy_ReleaseSet" taget file -->
+        <property name="releaseSetResponseFileName.initial" value="${deployEnv}ReleaseSet.xml" />
+        <var name="UrlToCall" value="http://deploymentdatabaseservices.int.thomson.com:8080/DID/deployed.aspx?environment=${deployEnv}&amp;releaseSet=${releaseSetversion}" />
+
+        <echo level="verbose">
+            Attempting to update the deployment database using the following URL:
+            ${UrlToCall}
+    
+            Expected destination location of response file: '${tempLocation}\${releaseSetResponseFileName.initial}'
+        </echo>
+
+        <if>
+			<not>
+				<equals arg1="${isDryRun}" arg2="false" />
+			</not>
+            <then>
+				<echo level="info">
+                    Calling the deployment information database's web application to indicate a new ${deployEnv} deployment.
+                    Command that would be executed = "${UrlToCall}"
+                </echo>
+                <!-- Create the response file -->
+                <echo file="${tempLocation}\${releaseSetResponseFileName.initial}">
+                    &lt;DocumentElement&gt;
+                      &lt;ReleaseSetDeployHistroy&gt;
+                          &lt;Id&gt;3&lt;/Id&gt;
+                          &lt;ReleaseSetId&gt;4&lt;/ReleaseSetId&gt;
+                          &lt;DeployedEnvironmentId&gt;2&lt;/DeployedEnvironmentId&gt;
+                          &lt;StartDateTime&gt;2009-09-03T14:16:57.257-05:00&lt;/StartDateTime&gt;
+                          &lt;Status&gt;FAILED&lt;/Status&gt;
+                      &lt;/ReleaseSetDeployHistroy&gt;
+                    &lt;/DocumentElement&gt;
+                </echo>
+            </then>
+            <else>
+                <get src="${UrlToCall}" dest="${tempLocation}\${releaseSetResponseFileName.initial}" ignoreerrors="true" verbose="true" />
+            </else>
+         </if>
+
+        <!-- Check if the above statement was executed, by checking if the response file is created. -->
+        <available file="${tempLocation}\${releaseSetResponseFileName.initial}" property="fileExists" />
+        <if>
+            <isset property="fileExists" />
+            <then>
+                <echo level="verbose" message="The response file exists. Checking if the update was successful" />
+                <!-- Determine if the database update was successful -->
+                <xmlproperty file="${tempLocation}\${releaseSetResponseFileName.initial}" collapseattributes="true" />
+                <loadfile property="resultFile" srcfile="${tempLocation}\${releaseSetResponseFileName.initial}" failonerror="false" />
+                <if>
+                    <isset property="ERROR" />
+                    <then>
+                        <echo level="error">
+                            Unable to update the deployment database with FAILED status for Release Set version '${releaseSetversion}'.
+                            Error: ${ERROR}
+
+                            Command used: "${UrlToCall}"
+                            Contents of log file:
+                            ${resultFile}
+                        </echo>
+                    </then>
+                    <else>
+                        <echo level="verbose" message="The deployment database was successfully updated with an initial status of 'FAILED' for Release Set version '${releaseSetversion}'." />
+                    </else>
+                </if>
+            </then>
+            <else>
+                <echo level="error">
+                    Unable to update the deployment database with initital status of FAILED for Release Set '${releaseSetversion}'.
+                    Error: Cannot connect to the deployment database service application or there was some other internal error!
+
+                    Command used: "${UrlToCall}"
+                </echo>
+            </else>
+        </if>
+		
+<!-- 		<exec executable="../../West.VitalSigns.ServicesClient.exe">
+			<arg line="http://myvitalsignsservices/EventInteropService.asmx/PostBuildDeployEvent environmentId=&quot;${environmentId}&quot; project=&quot;${project}&quot; action=&quot;Deploy&quot; status=&quot;Started&quot; site=&quot;ALL&quot; version=&quot;${version}&quot; dateTime=&quot;&quot; message=&quot;Deploy of ${version} starting&quot; location=&quot;&quot; "/>
+		</exec>
+		
+		<echo message="Executed: http://myvitalsignsservices/EventInteropService.asmx/PostBuildDeployEvent environmentId=&quot;${environmentId}&quot; project=&quot;${project}&quot; action=&quot;Deploy&quot; status=&quot;Started&quot; site=&quot;ALL&quot; version=&quot;${version}&quot; dateTime=&quot;&quot; message=&quot;Deploy of ${version} starting&quot; location=&quot;&quot;"/> -->
+    </target>
+
+    <!-- ================================================================================== 
+        target: -DeployDbUpdate_PostDeploy_ReleaseSet
+        description: This target will update the Deployment Database, with the Post-Deploy 
+                     status (of SUCCESSFUL) for the current Release Set.
+
+                     Since this target is called using "antcall" the properties set here
+                     are local to this target and is perfect for our needs.
+     ================================================================================== -->
+    <target name="-DeployDbUpdate_PostDeploy_ReleaseSet">
+        <echo level="info" message="Updating the deployment database for the Release Set with a status of 'SUCCESSFUL'" />
+        <!-- Make sure this property has the same value as that in "DeployDbUpdate_PreDeploy_ReleaseSet" taget file -->
+        <property name="releaseSetResponseFileName.initial" value="${deployEnv}ReleaseSet.xml" />
+        <property name="releaseSetResponseFileName.final" value="${deployEnv}ReleaseSet.statusUpdateLog.xml" />
+
+        <echo level="verbose" message="Checking if the response file exists in the location '${tempLocation}\${releaseSetResponseFileName.initial}'" />
+        <available file="${tempLocation}\${releaseSetResponseFileName.initial}" property="fileExists" />
+        <if>
+            <isset property="fileExists" />
+            <then>
+                <echo level="verbose" message="The response file exists." />
+                <!-- Determine if the database update was successful -->
+                <xmlproperty file="${tempLocation}\${releaseSetResponseFileName.initial}" collapseattributes="true" />
+                <loadfile property="resultFile" srcfile="${tempLocation}\${releaseSetResponseFileName.initial}" failonerror="false" />
+                <if>
+                    <isset property="DocumentElement.ReleaseSetDeployHistroy.Id" />
+                    <then>
+                        <echo level="verbose" message="The ID of the release set is successfully extracted." />
+                        <propertycopy property="releaseSetId" from="DocumentElement.ReleaseSetDeployHistroy.Id" override="true" />
+                        <var name="UrlToCall" value="http://deploymentdatabaseservices.int.thomson.com:8080/DID/deployed.aspx?rsid=${DocumentElement.ReleaseSetDeployHistroy.Id}&amp;status=SUCCESSFUL" />
+                        <echo level="info" message="Updating the database for Release Set version '${releaseSetversion}' with a status of 'SUCCESSFUL'" />
+                        <echo level="verbose">
+                            Attempting to update the deployment database using the following URL:
+                            ${UrlToCall}
+                            
+                            Expected destination location of response file: '${tempLocation}\${releaseSetResponseFileName.final}'
+                        </echo> 
+<!--                         <exec executable="../../West.VitalSigns.ServicesClient.exe">
+			    <arg line="http://myvitalsignsservices/EventInteropService.asmx/PostBuildDeployEvent environmentId=&quot;${environmentId}&quot; project=&quot;${project}&quot; action=&quot;Deploy&quot; status=&quot;Completed&quot; site=&quot;ALL&quot; version=&quot;${version}&quot; dateTime=&quot;&quot; message=&quot;Deploy of ${version} starting&quot; location=&quot;&quot; "/>
+			</exec> -->
+                        <if>
+							<not>
+								<equals arg1="${isDryRun}" arg2="false" />
+							</not>
+                            <then>
+								<echo level="info">
+                                    Calling the deployment information database's web application to indicate the status of the deployment.
+                                    Command that would be executed ="${UrlToCall}"
+                                    
+                                    No response file will be created in this "No Deployment" mode.
+                                </echo>
+                            </then>
+                            <else>
+                                <get src="${UrlToCall}" dest="${tempLocation}\${releaseSetResponseFileName.final}" ignoreerrors="true" verbose="true" />
+                            </else>
+                        </if>
+                    </then>
+                    <else>
+                        <echo level="error">
+                            Cannot find the Release Set ID tag (in file '${tempLocation}\${releaseSetResponseFileName.initial}') to update the deployment status for Release Set version '${releaseSetversion}'
+
+                            Contents of log file:
+                            ${resultFile}
+                    </echo>
+<!--                     <exec executable="../../West.VitalSigns.ServicesClient.exe">
+		        <arg line="http://myvitalsignsservices/EventInteropService.asmx/PostBuildDeployEvent environmentId=&quot;${environmentId}&quot; project=&quot;${project}&quot; action=&quot;Deploy&quot; status=&quot;Failed&quot; site=&quot;ALL&quot; version=&quot;${version}&quot; dateTime=&quot;&quot; message=&quot;Deploy of ${version} starting&quot; location=&quot;&quot; "/>
+		    </exec> -->
+                    </else>
+                </if>
+            </then>
+            <else>
+                <echo level="warning">
+                    Skipping the process to update the deployment database for Release Set version '${releaseSetversion}' since the response file was not located at "${tempLocation}\${releaseSetResponseFileName.initial}"
+                </echo>
+            </else>
+        </if>        
+    </target>
+
+    <!-- ====================================================================================== 
+        target: -preDeploySetup
+        description: Execute any pre-deployment process before calling the deployment 
+                     engine to deploy the various verticals.
+     ====================================================================================== -->
+    <target name="-preDeploySetup" depends="-updateDatabaseInfo">
+        <echo level="verbose" message="Foldering version to deploy = '${foldering.version}'" />
+        <if>
+			<and>
+				<isset property="foldering.version" />
+				<equals arg1="${runSchemaValidation}" arg2="true"/>
+			</and>
+            <then>
+                <!-- Call Foldering's schema validation script -->
+                <antcall target="-preDeploy_Foldering" inheritall="false" inheritrefs="false">
+                    <param name="folderingVersion" value="${foldering.version}" />
+                    <param name="folderingNasLoc" value="${releaseNASLoc.Foldering}" />
+                </antcall>
+            </then>
+			<else>
+				<echo level="info" message="If runSchemaValidation not set to '${runSchemaValidation}' would validate schemas."/>
+			</else>
+        </if>
+    </target>
+
+    <!-- ====================================================================================== 
+        target: -postDeploySetup
+        description: Execute post deployment process that are required for the deployment
+     ====================================================================================== -->
+    <target name="-postDeploySetup">
+	
+		<echo level="verbose" message="Starting postDeploySetup"/>
+        <!-- 
+            Since the same target cannot be called twice (using depends attribute in the target's tag) we will
+            have to call it using the AntCall task. Using this approach to execute the target is acceptable at 
+            this stage of the build since there are no properties that need to be set and returned back to the 
+            current project execution thread.
+    
+            We can also use the AntCallBack task (of the Ant contrib extension - http://ant-contrib.sourceforge.net/tasks/tasks/antcallback_task.html)
+            if there are any properties that are set and should be reflected back into the current execution thread.
+        -->
+        <antcall target="-updateDatabaseInfo" inheritall="true" inheritrefs="false">
+            <!-- All the parameters that it requires are already set and passed on to the target. -->
+        </antcall>		
+		
+		<antcall target="disconnect"/>
+    </target>
+
+    <!-- ====================================================================================== 
+        target: -preDeploy_Foldering
+        description: Validate if the current database schema is the correct schema for the 
+                     version that is to be deployed.
+
+                     Since this target is called using "antcall" the properties set here
+                     are local to this target.
+     ====================================================================================== -->
+    <target name="-preDeploy_Foldering">
+        <echo level="verbose" message="Schema file location '${folderingNasLoc}\${folderingVersion}\schema.version'" />
+        <property name="schema.version" value="${folderingNasLoc}\${folderingVersion}\schema.version" />
+		
+        <echo level="verbose">
+            Validating the schema version on the database:
+            schemaFile="${schema.version}" 
+			vertical="foldering"
+			environment="${deployEnv}"
+        </echo>
+
+		<ReadSchemaVersionFileAndCallWebApp environment="${deployEnv}" schemaFile="${schema.version}" vertical="foldering" site="${site}" />
+		
+		<echo level="info">
+            Schema validation is done for the Foldering database.
+			Values used:
+			schemaFile="${schema.version}" 
+            vertical="foldering"
+            environment="${deployEnv}"
+		</echo>
+		
+    </target>
+
+</project>
