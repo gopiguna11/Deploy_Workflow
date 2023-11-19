@@ -1,0 +1,92 @@
+name: 2_DataRoom-Demo-Deploy
+
+on:
+  workflow_call:
+   inputs:
+      version:
+        required: true
+        type: string
+      jarrelease:
+        required: true
+        type: string
+      DryRun:
+        required: true
+        type: string
+      Site:
+        required: true
+        type: string
+
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version'
+        required: true
+        default: '0.0.0'
+      jarrelease:
+        description: 'jar version for deployment'
+        required: true
+        default: 'latest'
+      DryRun:
+        type: choice
+        description: select a DryRun value
+        options:
+        - false
+        - true
+      Site:
+        type: choice
+        description: select a site
+        options:
+        - b
+        - pc1
+
+env:
+ ACTIONS_ALLOW_UNSECURE_COMMANDS: true
+ Site: ${{ github.event.inputs.Site }}
+ DryRun: ${{ github.event.inputs.DryRun }}
+ jarrelease: ${{ github.event.inputs.jarrelease }}
+ version: ${{ github.event.inputs.version }}
+ ReleaseSet: ${{github.event.inputs.version}}
+
+jobs:
+
+  DR-Demo-PreDeployNotify:
+     runs-on: [self-hosted, Linux ]
+     steps:  
+     - run: echo ${{ env.ReleaseSet }}
+     - name: DR.Demo-PreDeployNotify
+       if: success()
+       run: |
+         rm -rf mail.txt
+         echo -e "DataRoom (in Cobalt Services) Demo environment is being updated. We'll send out a note once finished. If you have any questions, send an email to Platform Grp CM-Cobalt.\n\n Site='${{ env.Site }}'\n\n Contents of Release Set = \n\n" >> mail.txt 
+         curl curl http://cobalttools.demo.int.westgroup.com:4000/cobaltReleaseqc/releaseSet/${{ env.ReleaseSet }}/release.xml >> mail.txt
+         cat mail.txt | mailx -s 'DataRoom (in Cobalt Services) Demo environment has been updated - Release Set ${{env.version}} ' -r "gunasekaran.gopi@thomsonreuters.com" gunasekaran.gopi@thomsonreuters.com
+
+  DR-Demo-Deploy-Release-Set:
+     needs: [DR-Demo-PreDeployNotify]
+     runs-on: [self-hosted, Windows ]
+     outputs:
+      version: ${{ env.version }}
+      Site: ${{ env.Site }}
+      DryRun: ${{ env.DryRun }}
+      JarReleaseVersion: ${{ env.jarrelease }}
+     env:
+      ACTIONS_ALLOW_UNSECURE_COMMANDS: true
+      ReleaseSet: ${{github.event.inputs.version}}
+
+     steps:  
+     - run: echo ${{ env.ReleaseSet }}
+     - name: DR-Demo-Deploy-Release-Set
+       shell: cmd
+       run : |
+            cd AntScript
+            echo "running ant script"
+            C:\Ant\apache-ant-1.9.3\bin\ant.bat -file deployReleaseSetnoDID.xml -DrunSchemaValidation=false -DdeployEnv=demodr  -Dproject=cobaltservices -Denvironment=38 -DenvironmentId=38 -DscriptName=deploydemodrReleaseSetWithVerify -DSite=${{ env.Site }} -Dversion=${{ env.ReleaseSet }} -Drelease.nas.password=${{ secrets.MGMT_S_PLATFORMGRP_CM_PASS }} -DNODE_AGENT_PASSWORD=${{ secrets.CONTROLROLE_PASS }}
+
+  call-workflow:
+    needs: [DR-Demo-Deploy-Release-Set]
+    uses: ./.github/workflows/3_DR-Demo-Site-Smoke-Tests.yml
+    with: 
+      version: ${{ needs.DR-Demo-Deploy-Release-Set.outputs.version }}
+      Site: ${{ needs.DR-Demo-Deploy-Release-Set.outputs.Site }}
+      DryRun: ${{ needs.DR-Demo-Deploy-Release-Set.outputs.DryRun }}
+      jarrelease: ${{ needs.DR-Demo-Deploy-Release-Set.outputs.JarReleaseVersion }}
