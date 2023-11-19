@@ -1,0 +1,55 @@
+<project name="Drain and Enable Script" default="drainSite" basedir=".">
+
+<property name="curl-exe"  value="c:\Program Files\curl\curl.exe"/>
+
+<taskdef resource="net/sf/antcontrib/antlib.xml" />
+
+<target name="drainSite" description="drain site" depends="verifyParameters">
+
+	<if>
+		<equals arg1="${Site}" arg2="pc1" />
+		<then>
+#            <var name="drainurl" value="&quot;http://cobalttools.demo.int.westgroup.com:3777/set?bigip=bigipcobaltsvcdemoe.int.thomsonreuters.com&amp;action=drain&amp;pool=dr.Platform-ManagementPool&amp;ipport=163.231.17.14:80&quot;"/>
+        </then>
+		<else>
+#			<var name="drainurl" value="&quot;http://cobalttools.demo.int.westgroup.com:3777/set?bigip=bigipcobaltsvcdemoe.int.thomsonreuters.com&amp;action=drain&amp;pool=dr.Platform-ManagementPool&amp;ipport=163.231.17.47:80&quot;"/>
+		</else>
+	</if>
+	
+	<if>
+		<equals arg1="${DryRun}" arg2="false" />
+		<then>
+			<exec executable="${curl-exe}" outputproperty="returnstatus" errorproperty="errorstatus"> 
+				<arg line="-u platform-cm:c@3f1283 ${drainurl}"/>
+			</exec>
+			
+			<echo message="STATUS: ${returnstatus}" />
+					
+			<if>
+				<contains string="${returnstatus}" substring="OK" />
+				<then>
+					<echo message="Drain Site Successful" />
+				</then>
+				<else>
+					<fail message="Drain site failed - see error" />
+				</else>
+			</if>
+		</then>
+		<else>
+			<echo message="DryRun in effect - nothing done" />
+		</else>		
+	</if>
+	
+</target>
+
+<target name="verifyParameters" description="verifyParameters">
+	<echo message="Verifying parameters are set"/>
+
+	<property name="Site" value=""/>
+	<fail message="Property &quot;Site&quot; has no value">
+	     <condition>
+	             <equals arg1="${Site}" arg2=""/>
+	     </condition>
+	</fail>
+ </target>
+</project>
