@@ -1,0 +1,94 @@
+name: 4_DataRoom-Site-Enable-Disable-and-Smoke-Tests-No-Site-deploy
+
+
+on:
+  workflow_call:
+   inputs:
+      version:
+        required: true
+        type: string
+      jarrelease:
+        required: true
+        type: string
+      DryRun:
+        required: true
+        type: string
+      Site:
+        required: true
+        type: string
+
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version'
+        required: true
+        default: '0.0.0'
+      jarrelease:
+        description: 'jar version for deployment'
+        required: true
+        default: 'latest'
+      DryRun:
+        type: choice
+        description: select a DryRun value
+        options:
+        - false
+        - true
+      Site:
+        type: choice
+        description: select a site 
+        options:
+        - b
+        - pc1
+      enable_desable_site:
+        type: choice
+        description: select enable_desable_site
+        options:
+        - enableSite.xml
+        - drainSite.xml
+
+env:
+ ACTIONS_ALLOW_UNSECURE_COMMANDS: true
+ Site: ${{ github.event.inputs.Site }}
+ DryRun: ${{ github.event.inputs.DryRun }}
+ jarrelease: ${{ github.event.inputs.jarrelease }}
+ version: ${{ github.event.inputs.version }}
+ ReleaseSet: ${{github.event.inputs.version}}
+ enable_desable_site: ${{ github.event.inputs.enable_desable_site}}
+jobs:
+
+  DR-Demo-Enable-Disable-DR-Demo-Site:
+     runs-on: [self-hosted, windows ]
+
+     steps:  
+     - run: echo ${{ env.ReleaseSet }}
+     - name: DR-Demo-Enable-Disable-DR-Demo-Site
+       run : |
+            cd DRDemoJenkinsScripts/DR.Demo_Enable-Disable_DR_Demo_Site
+            ls
+            echo ${{ env.ReleaseSet }}
+            C:\Ant\apache-ant-1.9.3\bin\ant.bat -file ${{ env.enable_desable_site }} -DSite=${{ env.Site }} -DDryRun=${{ env.DryRun }} -Dautodeploy=false -Decomqc_pass=${{ secrets.MGMT_S_PLATFORMGRP_CM_PASS }} -DRetain=false -DNodeAgentUser=${{ secrets.NODEAGENTUSER_NAME}} -DNodeAgentPassword=${{ secrets.CONTROLROLE_PASS }} -Dasadmin_pass=${{ secrets.ASADMIN_PASS }}
+  
+  DR-Demo-Smoke-Tests-No-Site:
+     needs: [DR-Demo-Enable-Disable-DR-Demo-Site]
+     runs-on: [self-hosted, Windows ]
+     steps:  
+     - run: echo ${{ env.ReleaseSet }}
+     - name: DR.Demo-Smoke-Tests-No-Site
+       run : |
+            cd AntScript
+            C:\Ant\apache-ant-1.9.3\bin\ant.bat -file SmokeTestAntScript.xml -DRetain=true -DSite=${{ github.event.inputs.Site }} -DDryRun=${{ github.event.inputs.DryRun }} -Dautodeploy=false -DdeployEnv=demodr -Denvironment=demo -Dversion='${{ env.ReleaseSet }}.${{ github.run_number }}'
+
+  DR-Demo-PostDeployNotify:
+     needs: [DR-Demo-Smoke-Tests-No-Site]
+     runs-on: [self-hosted, Linux ]
+     steps:  
+     - run: echo ${{ env.ReleaseSet }}
+     - name: DR.Demo-PostDeployNotify
+       if: success()
+       run: |
+         rm -rf mail.txt
+         echo -e "DataRoom (in Cobalt Services) Demo environment has been updated with the last successful CI build for the verticals. If you have any questions, send an email to Platform Grp CM-Cobalt.\n\n Site='${{ env.Site }}'\n\n Contents of Release Set = \n\n" >> mail.txt 
+         curl http://cobalttools.ci.int.westgroup.com:4000/cobaltReleaseqc/releaseSet/${{ env.ReleaseSet }}/release.xml >> mail.txt
+         cat mail.txt | mailx -s 'DataRoom (in Cobalt Services) Demo environment has been updated - Release Set ${{env.version}} ' -r "gunasekaran.gopi@thomsonreuters.com" gunasekaran.gopi@thomsonreuters.com
+
+ 
